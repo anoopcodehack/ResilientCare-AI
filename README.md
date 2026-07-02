@@ -78,8 +78,7 @@ User Message
 
 ---
 MockUps
-
-
+<img width="1802" height="835" alt="image" src="https://github.com/user-attachments/assets/30927df1-90de-4507-af68-0e7df25d668b" />
 ---
 ## 🚀 Quick Start
 
