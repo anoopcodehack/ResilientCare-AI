@@ -77,7 +77,10 @@ User Message
 - **Fail-secure validator** — if the validator itself errors, it defaults to FLAG_FOR_REVIEW, never PASS.
 
 ---
+MockUps
+<img width="1828" height="861" alt="image" src="https://github.com/user-attachments/assets/3fd11ca6-c6db-429a-8a18-ca792154a79f" />
 
+---
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -270,4 +273,4 @@ resilientcare/
 
 ---
 
-*Built for national hackathon — demonstrating the future of resilient, self-healing AI systems.*
+
