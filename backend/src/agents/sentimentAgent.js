@@ -1,102 +1,67 @@
-const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const SENTIMENT_PROMPT = `You are a sentiment analysis engine for a customer support system.
-Analyze the customer message and respond ONLY with valid JSON in this exact format:
+const SENTIMENT_SYSTEM = `You are a sentiment analysis engine for customer support.
+Respond ONLY with valid JSON, no markdown, no extra text:
 {
-  "sentiment": "positive" | "neutral" | "negative" | "angry" | "frustrated" | "confused" | "satisfied",
+  "sentiment": "positive"|"neutral"|"negative"|"angry"|"frustrated"|"confused"|"satisfied",
   "score": <-1.0 to 1.0>,
-  "intensity": "low" | "medium" | "high",
-  "emotions": ["emotion1", "emotion2"],
-  "urgency": "low" | "medium" | "high" | "critical",
+  "intensity": "low"|"medium"|"high",
+  "emotions": ["emotion1"],
+  "urgency": "low"|"medium"|"high"|"critical",
   "escalationRecommended": <boolean>,
-  "escalationReason": <null or string>
-}
-Be precise. Angry/frustrated customers with high urgency should have escalationRecommended: true.`;
+  "escalationReason": null or "<reason>"
+}`;
 
-// Fast keyword-based pre-classifier to avoid LLM call for obvious cases
-const SENTIMENT_KEYWORDS = {
-  angry: ["furious", "outraged", "disgusting", "terrible", "horrible", "worst", "scam", "fraud", "lawsuit", "unacceptable", "ridiculous"],
-  frustrated: ["frustrated", "annoyed", "disappointed", "useless", "waste", "again", "still not", "keeps happening", "never works"],
-  positive: ["great", "excellent", "amazing", "perfect", "love", "fantastic", "thank you", "helpful", "wonderful", "awesome"],
-  confused: ["confused", "don't understand", "unclear", "what does", "how do", "not sure", "help me understand"]
+const KEYWORDS = {
+  angry: ["furious","outraged","disgusting","terrible","horrible","worst","scam","fraud","lawsuit","unacceptable"],
+  frustrated: ["frustrated","annoyed","disappointed","useless","waste","keeps happening","never works"],
+  positive: ["great","excellent","amazing","perfect","love","fantastic","thank you","helpful","wonderful"],
+  confused: ["confused","don't understand","unclear","what does","how do","not sure"]
 };
 
 class SentimentAgent {
   constructor() {
-    this.model = "claude-haiku-4-5-20251001"; // Use Haiku for speed/cost on sentiment
-    this.cache = new Map(); // Simple message hash cache
+    this.model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      systemInstruction: SENTIMENT_SYSTEM
+    });
   }
 
   quickClassify(message) {
     const lower = message.toLowerCase();
-    for (const [sentiment, keywords] of Object.entries(SENTIMENT_KEYWORDS)) {
-      if (keywords.some(kw => lower.includes(kw))) {
-        return sentiment;
-      }
+    for (const [sentiment, keywords] of Object.entries(KEYWORDS)) {
+      if (keywords.some(kw => lower.includes(kw))) return sentiment;
     }
     return null;
   }
 
   async analyze(message, conversationHistory = []) {
     const startTime = Date.now();
-
-    // Quick classify first
     const quickResult = this.quickClassify(message);
 
-    // For very short or clearly neutral messages, skip LLM
     if (message.length < 20 && !quickResult) {
-      return {
-        sentiment: "neutral",
-        score: 0,
-        intensity: "low",
-        emotions: [],
-        urgency: "low",
-        escalationRecommended: false,
-        escalationReason: null,
-        analysisTime: Date.now() - startTime,
-        method: "QUICK_NEUTRAL"
-      };
+      return { sentiment: "neutral", score: 0, intensity: "low", emotions: [], urgency: "low", escalationRecommended: false, escalationReason: null, analysisTime: Date.now() - startTime, method: "QUICK_NEUTRAL" };
     }
 
     try {
-      // Include last 2 turns for context
-      const contextStr = conversationHistory.slice(-4)
-        .map(t => `${t.role}: ${t.content?.substring(0, 100)}`)
-        .join("\n");
-
-      const prompt = `${contextStr ? `Prior context:\n${contextStr}\n\n` : ""}Customer message: "${message}"`;
-
-      const completion = await client.messages.create({
-        model: this.model,
-        max_tokens: 256,
-        system: SENTIMENT_PROMPT,
-        messages: [{ role: "user", content: prompt }]
-      });
-
-      const raw = completion.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-      const clean = raw.replace(/^```json?\n?|\n?```$/g, "").trim();
-      const result = JSON.parse(clean);
-
-      return {
-        ...result,
-        analysisTime: Date.now() - startTime,
-        method: "LLM_ANALYSIS"
-      };
-
+      const prompt = `Analyze this customer message sentiment: "${message}"`;
+      const result = await this.model.generateContent(prompt);
+      const raw = result.response.text().trim().replace(/^```json?\n?|\n?```$/g, "").trim();
+      const parsed = JSON.parse(raw);
+      return { ...parsed, analysisTime: Date.now() - startTime, method: "LLM_ANALYSIS" };
     } catch (error) {
       console.error("[SentimentAgent] Error:", error.message);
-      // Fallback using quick classify
-      const fallbackSentiment = quickResult || "neutral";
+      const fallback = quickResult || "neutral";
       return {
-        sentiment: fallbackSentiment,
-        score: fallbackSentiment === "angry" ? -0.8 : fallbackSentiment === "frustrated" ? -0.5 : 0,
+        sentiment: fallback,
+        score: fallback === "angry" ? -0.8 : fallback === "frustrated" ? -0.5 : 0,
         intensity: quickResult ? "medium" : "low",
         emotions: quickResult ? [quickResult] : [],
-        urgency: ["angry", "frustrated"].includes(fallbackSentiment) ? "high" : "low",
-        escalationRecommended: fallbackSentiment === "angry",
-        escalationReason: fallbackSentiment === "angry" ? "High anger detected via keyword analysis" : null,
+        urgency: ["angry","frustrated"].includes(fallback) ? "high" : "low",
+        escalationRecommended: fallback === "angry",
+        escalationReason: fallback === "angry" ? "High anger detected" : null,
         analysisTime: Date.now() - startTime,
         method: "FALLBACK"
       };

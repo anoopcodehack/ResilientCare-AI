@@ -1,6 +1,6 @@
-const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const BASE_SYSTEM_PROMPT = `You are a helpful, professional customer support AI assistant for a leading enterprise software company.
 
@@ -22,41 +22,37 @@ Always respond in the same language as the user.`;
 
 class ResponseAgent {
   constructor() {
-    this.model = "claude-sonnet-4-20250514";
+    this.model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      systemInstruction: BASE_SYSTEM_PROMPT
+    });
   }
 
   async process(userMessage, conversationHistory = [], sessionId, kbContext = "") {
     const startTime = Date.now();
 
-    // Inject KB context into system prompt if available
-    const systemPrompt = BASE_SYSTEM_PROMPT + (kbContext || "");
-
-    const messages = [
-      ...conversationHistory
-        .filter(t => t.role && t.content)
-        .map(turn => ({ role: turn.role, content: turn.content })),
-      { role: "user", content: userMessage }
-    ];
-
     try {
-      const completion = await client.messages.create({
-        model: this.model,
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages
-      });
+      // Build history for Gemini (role must be "user" or "model")
+      const history = conversationHistory
+        .filter(t => t.role && t.content)
+        .map(turn => ({
+          role: turn.role === "assistant" ? "model" : "user",
+          parts: [{ text: turn.content }]
+        }));
 
-      const responseText = completion.content
-        .filter(block => block.type === "text")
-        .map(block => block.text)
-        .join("");
+      const chat = this.model.startChat({ history });
+
+      // Inject KB context into message if available
+      const fullMessage = kbContext
+        ? `${userMessage}\n\n[CONTEXT FOR THIS QUERY:${kbContext}]`
+        : userMessage;
+
+      const result = await chat.sendMessage(fullMessage);
+      const responseText = result.response.text();
 
       return {
         response: responseText,
         processingTime: Date.now() - startTime,
-        inputTokens: completion.usage?.input_tokens || 0,
-        outputTokens: completion.usage?.output_tokens || 0,
-        stopReason: completion.stop_reason,
         kbContextInjected: kbContext.length > 0
       };
     } catch (error) {
